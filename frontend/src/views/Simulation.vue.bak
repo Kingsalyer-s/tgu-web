@@ -1,0 +1,663 @@
+<template>
+    <section class="section sim-page">
+        <el-alert type="info" show-icon :closable="false" style="margin-bottom: 24px;">
+            <template #title>
+                <strong>使用说明：</strong>
+                步骤 ①「掐丝」用铜丝勾勒图案轮廓 → 步骤 ②「填砂」选择彩砂颜色点击封闭区域填充 → 步骤 ③「预览」查看烧结后的成品效果。
+            </template>
+        </el-alert>
+
+        <div class="sim-layout">
+            <!-- 左侧：工具面板 -->
+            <aside class="sim-tools">
+                <div class="tool-card">
+                    <div class="tool-title">
+                        <span class="tool-step">①</span> 工艺阶段
+                    </div>
+                    <el-radio-group v-model="stage" size="large" style="width: 100%;">
+                        <el-radio-button value="line" style="flex: 1;">掐丝勾线</el-radio-button>
+                        <el-radio-button value="fill" style="flex: 1;">彩砂填充</el-radio-button>
+                        <el-radio-button value="preview" style="flex: 1;">成品预览</el-radio-button>
+                    </el-radio-group>
+                </div>
+
+                <!-- 掐丝：模板选择+笔刷 -->
+                <div v-if="stage === 'line'" class="tool-card">
+                    <div class="tool-title">
+                        <span class="tool-step">②</span> 图样模板
+                    </div>
+                    <div class="template-grid">
+                        <div
+                            v-for="tpl in templates"
+                            :key="tpl.key"
+                            class="template-item"
+                            :class="{ active: template === tpl.key }"
+                            @click="loadTemplate(tpl.key)"
+                        >
+                            <svg viewBox="0 0 100 100"><path :d="tpl.thumb" fill="none" stroke="#C9A961" stroke-width="2"/></svg>
+                            <div class="template-label">{{ tpl.label }}</div>
+                        </div>
+                    </div>
+
+                    <el-divider>手绘掐丝</el-divider>
+                    <div class="row">
+                        <el-text>线条粗细</el-text>
+                        <el-slider v-model="lineWidth" :min="2" :max="10" style="flex: 1; margin-left: 12px;" />
+                    </div>
+                    <div class="row">
+                        <el-text>金线颜色</el-text>
+                        <el-color-picker v-model="lineColor" style="margin-left: 12px;" />
+                    </div>
+                    <el-button block @click="undoLast" style="width: 100%; margin-top: 8px;">
+                        <el-icon><Back /></el-icon>&nbsp;撤销上一笔
+                    </el-button>
+                </div>
+
+                <!-- 填砂：彩砂调色板 -->
+                <div v-if="stage === 'fill'" class="tool-card">
+                    <div class="tool-title">
+                        <span class="tool-step">③</span> 彩砂颜色
+                    </div>
+                    <div class="palette">
+                        <div
+                            v-for="c in palette"
+                            :key="c.hex"
+                            class="palette-item"
+                            :class="{ active: fillColor === c.hex }"
+                            :style="{ background: c.hex }"
+                            :title="c.name"
+                            @click="fillColor = c.hex"
+                        ></div>
+                    </div>
+                    <div class="row">
+                        <el-text>自定义</el-text>
+                        <el-color-picker v-model="fillColor" style="margin-left: 12px;" />
+                    </div>
+                    <el-text type="info" size="small" style="display: block; margin-top: 12px;">
+                        点击画布中的封闭区域即可填充彩砂
+                    </el-text>
+                </div>
+
+                <!-- 预览控制 -->
+                <div v-if="stage === 'preview'" class="tool-card">
+                    <div class="tool-title">
+                        <span class="tool-step">④</span> 光影效果
+                    </div>
+                    <div class="row">
+                        <el-text>光泽度</el-text>
+                        <el-slider v-model="glossLevel" :min="0" :max="100" style="flex: 1; margin-left: 12px;" />
+                    </div>
+                    <div class="row">
+                        <el-text>砂粒质感</el-text>
+                        <el-slider v-model="sandTexture" :min="0" :max="100" style="flex: 1; margin-left: 12px;" />
+                    </div>
+                </div>
+
+                <!-- 通用操作 -->
+                <div class="tool-card">
+                    <div class="tool-title">作品操作</div>
+                    <el-button-group style="width: 100%; display: flex;">
+                        <el-button style="flex: 1;" @click="clearAll">
+                            <el-icon><Delete /></el-icon>&nbsp;清空
+                        </el-button>
+                        <el-button style="flex: 1;" @click="exportImage">
+                            <el-icon><Download /></el-icon>&nbsp;导出
+                        </el-button>
+                    </el-button-group>
+                    <el-button type="primary" style="width: 100%; margin-top: 10px;" @click="saveWork">
+                        <el-icon><Star /></el-icon>&nbsp;保存到作品集
+                    </el-button>
+                </div>
+            </aside>
+
+            <!-- 中央：Canvas 画布 -->
+            <div class="sim-canvas-wrap">
+                <div class="canvas-header">
+                    <span class="canvas-title">虚拟工坊</span>
+                    <span class="canvas-info">
+                        当前阶段：<strong>{{ stageLabel }}</strong> · 尺寸：{{ canvasSize }}
+                    </span>
+                </div>
+                <div class="canvas-stage" ref="stageRef">
+                    <canvas
+                        ref="canvasRef"
+                        :width="canvasW"
+                        :height="canvasH"
+                        @mousedown="onDown"
+                        @mousemove="onMove"
+                        @mouseup="onUp"
+                        @mouseleave="onUp"
+                        @click="onClick"
+                    ></canvas>
+                    <div v-if="stage === 'preview'" class="preview-shine" :style="{opacity: glossLevel / 200}"></div>
+                </div>
+                <div class="canvas-footer">
+                    <el-tag type="info" size="small">操作提示：{{ hint }}</el-tag>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部：工艺讲解 -->
+        <div class="craft-story">
+            <h3 class="story-title">掐丝彩砂 · 工艺溯源</h3>
+            <div class="story-grid">
+                <div>
+                    <h4>历史渊源</h4>
+                    <p>掐丝工艺可追溯至元代，源自景泰蓝制作技艺。以细金属丝掐制出图案轮廓，再以彩色矿物填色，历经烧制方成。掐丝彩砂在传统金属珐琅工艺基础上，改良为可常温创作、便于普及教学的现代样式。</p>
+                </div>
+                <div>
+                    <h4>工艺步骤</h4>
+                    <p>① 描图 · 在胎体上勾勒图案<br>② 掐丝 · 铜丝弯折粘贴成轮廓线<br>③ 点砂 · 将彩色天然矿物砂粒填入封闭区域<br>④ 定型 · 使用天然树脂固定<br>⑤ 打磨抛光 · 呈现光泽</p>
+                </div>
+                <div>
+                    <h4>教学价值</h4>
+                    <p>本仿真系统在数字画布上还原完整工艺流程，学习者可无成本、可反复地练习图案设计与色彩搭配，理解掐丝勾线的美学法则，并将作品导出用于实体创作打样参考。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Back, Delete, Download, Star } from '@element-plus/icons-vue'
+
+// ============== 状态 ==============
+const stage = ref('line')              // 'line' | 'fill' | 'preview'
+const canvasRef = ref(null)
+const stageRef = ref(null)
+const canvasW = ref(900)
+const canvasH = ref(600)
+const template = ref('')
+
+const lineWidth = ref(4)
+const lineColor = ref('#D4AF37')       // 金色
+const fillColor = ref('#C0392B')       // 朱砂
+const glossLevel = ref(50)
+const sandTexture = ref(60)
+
+const palette = [
+    { name: '朱砂', hex: '#C0392B' },
+    { name: '藏青', hex: '#1F3A5F' },
+    { name: '石绿', hex: '#4E8867' },
+    { name: '赭黄', hex: '#C9A961' },
+    { name: '青莲', hex: '#74256A' },
+    { name: '桃红', hex: '#E85A85' },
+    { name: '雪白', hex: '#F5F1E8' },
+    { name: '玄墨', hex: '#2C1810' },
+    { name: '天青', hex: '#7AA9C7' },
+    { name: '嫩绿', hex: '#A8C77A' },
+    { name: '橙金', hex: '#E8A055' },
+    { name: '紫萱', hex: '#9B4090' }
+]
+
+const templates = [
+    {
+        key: 'flower',
+        label: '缠枝莲',
+        thumb: 'M50,15 C70,15 85,35 80,55 C90,55 95,75 80,85 C70,90 60,85 50,80 C40,85 30,90 20,85 C5,75 10,55 20,55 C15,35 30,15 50,15 Z',
+        commit: 'M450,150 C540,150 610,240 590,330 C650,330 700,410 630,470 C580,510 500,490 450,460 C400,490 320,510 270,470 C200,410 250,330 310,330 C290,240 360,150 450,150 Z'
+    },
+    {
+        key: 'crane',
+        label: '云鹤纹',
+        thumb: 'M20,60 Q40,20 60,50 T90,45 M30,70 Q50,60 70,70',
+        commit: 'M180,360 Q360,120 540,300 T810,270 M270,420 Q450,360 630,420'
+    },
+    {
+        key: 'wave',
+        label: '海浪纹',
+        thumb: 'M10,50 Q25,30 40,50 T70,50 T100,50 M10,70 Q25,50 40,70 T70,70 T100,70',
+        commit: 'M90,300 Q225,180 360,300 T630,300 T900,300 M90,420 Q225,300 360,420 T630,420 T900,420'
+    },
+    {
+        key: 'peony',
+        label: '牡丹花',
+        thumb: 'M50,50 m-20,0 a20,20 0 1,0 40,0 a20,20 0 1,0 -40,0 M50,50 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0',
+        commit: 'M450,300 m-180,0 a180,180 0 1,0 360,0 a180,180 0 1,0 -360,0 M450,300 m-90,0 a90,90 0 1,0 180,0 a90,90 0 1,0 -180,0'
+    }
+]
+
+// ============== 绘图数据 ==============
+const strokes = ref([])          // 掐丝线条 [{type, points/svgPath, width, color}]
+const fills = ref([])            // 填色 [{x, y, color, region?}]
+const isDrawing = ref(false)
+let currentStroke = null
+
+const canvasSize = computed(() => `${canvasW.value} × ${canvasH.value}`)
+const stageLabel = computed(() => ({ line: '掐丝勾线', fill: '彩砂填充', preview: '成品预览' }[stage.value]))
+const hint = computed(() => ({
+    line: '按住鼠标左键绘制掐丝线条，或点击左侧模板一键载入',
+    fill: '选择彩砂颜色，点击画布中的封闭区域进行填充',
+    preview: '拖动滑块调整光泽度与砂粒质感，感受成品效果'
+}[stage.value]))
+
+// ============== 事件 ==============
+const getPos = e => {
+    const rect = canvasRef.value.getBoundingClientRect()
+    const scale = canvasW.value / rect.width
+    return {
+        x: (e.clientX - rect.left) * scale,
+        y: (e.clientY - rect.top) * scale
+    }
+}
+
+const onDown = e => {
+    if (stage.value !== 'line') return
+    isDrawing.value = true
+    const p = getPos(e)
+    currentStroke = { type: 'freehand', points: [p], width: lineWidth.value, color: lineColor.value }
+}
+
+const onMove = e => {
+    if (!isDrawing.value || !currentStroke) return
+    const p = getPos(e)
+    currentStroke.points.push(p)
+    render()
+}
+
+const onUp = () => {
+    if (currentStroke && currentStroke.points.length > 1) {
+        strokes.value.push(currentStroke)
+    }
+    currentStroke = null
+    isDrawing.value = false
+}
+
+const onClick = e => {
+    if (stage.value !== 'fill') return
+    const p = getPos(e)
+    fills.value.push({ x: p.x, y: p.y, color: fillColor.value, id: Date.now() })
+    render()
+}
+
+const undoLast = () => {
+    if (stage.value === 'line' && strokes.value.length) {
+        strokes.value.pop()
+    } else if (stage.value === 'fill' && fills.value.length) {
+        fills.value.pop()
+    }
+    render()
+}
+
+const loadTemplate = key => {
+    const tpl = templates.find(t => t.key === key)
+    if (!tpl) return
+    template.value = key
+    strokes.value.push({
+        type: 'svgpath',
+        d: tpl.commit,
+        width: lineWidth.value,
+        color: lineColor.value
+    })
+    render()
+    ElMessage.success(`已载入模板：${tpl.label}`)
+}
+
+const clearAll = () => {
+    ElMessageBox.confirm('确定清空当前画布？此操作不可撤销。', '提示', { type: 'warning' })
+        .then(() => {
+            strokes.value = []
+            fills.value = []
+            template.value = ''
+            render()
+            ElMessage.success('已清空')
+        }).catch(() => {})
+}
+
+const exportImage = () => {
+    if (!canvasRef.value) return
+    const link = document.createElement('a')
+    link.download = `掐丝彩砂作品_${Date.now()}.png`
+    link.href = canvasRef.value.toDataURL('image/png')
+    link.click()
+    ElMessage.success('已导出到本地')
+}
+
+const saveWork = async () => {
+    try {
+        await ElMessageBox.prompt('给你的作品起个名字', '保存作品', {
+            confirmButtonText: '保存',
+            cancelButtonText: '取消',
+            inputPattern: /.+/,
+            inputErrorMessage: '请输入作品名称',
+            inputValue: `我的掐丝彩砂 - ${new Date().toLocaleString('zh-CN')}`
+        }).then(({ value }) => {
+            const data = {
+                name: value,
+                strokes: strokes.value,
+                fills: fills.value,
+                dataUrl: canvasRef.value.toDataURL('image/jpeg', 0.8),
+                createdAt: Date.now()
+            }
+            const key = 'sim_works'
+            const arr = JSON.parse(localStorage.getItem(key) || '[]')
+            arr.unshift(data)
+            localStorage.setItem(key, JSON.stringify(arr.slice(0, 30)))
+            ElMessage.success('已保存到本地作品集')
+        })
+    } catch { /* user cancelled */ }
+}
+
+// ============== 渲染 ==============
+const render = () => {
+    const canvas = canvasRef.value
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const w = canvas.width, h = canvas.height
+
+    // 背景：胎体（深色底）
+    if (stage.value === 'preview') {
+        const grad = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, Math.max(w,h)/1.2)
+        grad.addColorStop(0, '#2C1810')
+        grad.addColorStop(1, '#1a0e08')
+        ctx.fillStyle = grad
+    } else {
+        ctx.fillStyle = '#F5F1E8'
+    }
+    ctx.fillRect(0, 0, w, h)
+
+    // 网格辅助线（仅掐丝阶段）
+    if (stage.value === 'line') {
+        ctx.strokeStyle = 'rgba(116,37,106,.06)'
+        ctx.lineWidth = 1
+        const g = 40
+        for (let x = 0; x < w; x += g) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke()
+        }
+        for (let y = 0; y < h; y += g) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke()
+        }
+    }
+
+    // 填砂（彩砂点云）
+    fills.value.forEach(f => drawSand(ctx, f))
+    if (stage.value === 'fill' || stage.value === 'preview') {
+        // Nothing extra; fills drawn above
+    }
+
+    // 掐丝线（在填砂之上）
+    ;[...strokes.value, currentStroke].filter(Boolean).forEach(s => drawStroke(ctx, s))
+
+    // 预览光泽
+    if (stage.value === 'preview' && glossLevel.value > 0) {
+        const shineGrad = ctx.createLinearGradient(0, 0, w, h)
+        const alpha = glossLevel.value / 400
+        shineGrad.addColorStop(0, `rgba(255,255,255,${alpha})`)
+        shineGrad.addColorStop(0.5, `rgba(255,255,255,0)`)
+        shineGrad.addColorStop(1, `rgba(255,255,255,${alpha * .6})`)
+        ctx.fillStyle = shineGrad
+        ctx.fillRect(0, 0, w, h)
+    }
+}
+
+const drawStroke = (ctx, s) => {
+    if (!s) return
+    // 掐丝金属质感：外描深色 + 内层金色
+    if (s.type === 'freehand') {
+        if (s.points.length < 2) return
+        // outer
+        ctx.strokeStyle = 'rgba(60,30,10,.7)'
+        ctx.lineWidth = s.width + 2
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.beginPath()
+        ctx.moveTo(s.points[0].x, s.points[0].y)
+        s.points.forEach(p => ctx.lineTo(p.x, p.y))
+        ctx.stroke()
+        // inner
+        ctx.strokeStyle = s.color
+        ctx.lineWidth = s.width
+        ctx.beginPath()
+        ctx.moveTo(s.points[0].x, s.points[0].y)
+        s.points.forEach(p => ctx.lineTo(p.x, p.y))
+        ctx.stroke()
+    } else if (s.type === 'svgpath') {
+        const p = new Path2D(s.d)
+        ctx.strokeStyle = 'rgba(60,30,10,.7)'
+        ctx.lineWidth = s.width + 2
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.stroke(p)
+        ctx.strokeStyle = s.color
+        ctx.lineWidth = s.width
+        ctx.stroke(p)
+    }
+}
+
+const drawSand = (ctx, f) => {
+    // 以点击点为中心，绘制一片砂粒（半径根据 sandTexture 微调）
+    const R = 60 + sandTexture.value / 2
+    const density = 400 + sandTexture.value * 4
+    ctx.save()
+    for (let i = 0; i < density; i++) {
+        const angle = Math.random() * Math.PI * 2
+        const dist = Math.sqrt(Math.random()) * R
+        const x = f.x + Math.cos(angle) * dist
+        const y = f.y + Math.sin(angle) * dist
+        const grainSize = 0.5 + Math.random() * 1.4
+        const bright = 0.7 + Math.random() * 0.5
+        ctx.fillStyle = shade(f.color, bright)
+        ctx.beginPath()
+        ctx.arc(x, y, grainSize, 0, Math.PI * 2)
+        ctx.fill()
+    }
+    ctx.restore()
+}
+
+// 颜色亮度调节
+const shade = (hex, mul) => {
+    const c = hex.replace('#', '')
+    const num = parseInt(c, 16)
+    let r = (num >> 16) & 0xff
+    let g = (num >> 8) & 0xff
+    let b = num & 0xff
+    r = Math.min(255, Math.round(r * mul))
+    g = Math.min(255, Math.round(g * mul))
+    b = Math.min(255, Math.round(b * mul))
+    return `rgb(${r},${g},${b})`
+}
+
+// ============== 响应式尺寸 ==============
+const resize = () => {
+    const el = stageRef.value
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    canvasW.value = Math.max(600, Math.floor(rect.width))
+    canvasH.value = Math.floor(canvasW.value * 0.62)
+    nextTick(render)
+}
+
+// ============== 生命周期 ==============
+onMounted(() => {
+    resize()
+    window.addEventListener('resize', resize)
+    render()
+})
+onUnmounted(() => {
+    window.removeEventListener('resize', resize)
+})
+
+watch([stage, glossLevel, sandTexture], render)
+</script>
+
+<style scoped>
+.sim-page {
+    max-width: 1400px;
+    margin: 40px auto 60px;
+}
+.sim-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 24px;
+    align-items: flex-start;
+}
+.sim-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: sticky;
+    top: 80px;
+}
+.tool-card {
+    padding: 16px 0 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+.tool-card:last-child { border-bottom: none; }
+.tool-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-primary);
+    letter-spacing: 2px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.tool-step {
+    background: var(--color-accent);
+    color: #fff;
+    width: 22px; height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 12px;
+    font-family: var(--font-serif);
+}
+.row {
+    display: flex;
+    align-items: center;
+    margin: 10px 0;
+}
+.template-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.template-item {
+    aspect-ratio: 1;
+    background: #F7F3EC;
+    border-radius: 6px;
+    padding: 8px;
+    text-align: center;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all .2s;
+    position: relative;
+}
+.template-item:hover { border-color: var(--color-primary-light); background: #fff; }
+.template-item.active { border-color: var(--color-primary); background: #fff; }
+.template-item svg { width: 100%; height: 70%; }
+.template-label {
+    font-size: 12px;
+    color: var(--color-text-soft);
+    margin-top: 4px;
+}
+.palette {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.palette-item {
+    aspect-ratio: 1;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all .15s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.15);
+}
+.palette-item:hover { transform: scale(1.1); }
+.palette-item.active {
+    border-color: var(--color-primary);
+    transform: scale(1.15);
+    box-shadow: 0 3px 8px rgba(116,37,106,.4);
+}
+
+.sim-canvas-wrap {
+    padding: 0;
+    border: 1px solid var(--color-border);
+}
+.canvas-header {
+    padding: 14px 20px;
+    background: var(--color-primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.canvas-title {
+    font-family: var(--font-brush);
+    font-size: 18px;
+    letter-spacing: 3px;
+}
+.canvas-info { font-size: 13px; opacity: .9; }
+.canvas-info strong { color: var(--color-gold); }
+.canvas-stage {
+    position: relative;
+    background: #F5F1E8;
+    padding: 20px;
+    min-height: 500px;
+}
+.canvas-stage canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: inset 0 0 20px rgba(0,0,0,.1);
+    cursor: crosshair;
+}
+.preview-shine {
+    position: absolute;
+    inset: 20px;
+    border-radius: 4px;
+    pointer-events: none;
+    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,.15) 50%, transparent 70%);
+    mix-blend-mode: overlay;
+}
+.canvas-footer {
+    padding: 12px 20px;
+    background: #FBF8F1;
+    border-top: 1px solid var(--color-border);
+}
+
+.craft-story {
+    margin-top: 60px;
+    padding: 40px 0;
+    border-top: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-primary);
+    padding-left: 30px;
+}
+.story-title {
+    font-family: var(--font-brush);
+    font-size: 24px;
+    color: var(--color-primary);
+    letter-spacing: 4px;
+    margin-bottom: 24px;
+}
+.story-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 40px;
+}
+.story-grid h4 {
+    font-size: 15px;
+    color: var(--color-primary);
+    margin-bottom: 12px;
+    padding-left: 10px;
+    border-left: 3px solid var(--color-accent);
+}
+.story-grid p {
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--color-text-soft);
+}
+
+@media (max-width: 1024px) {
+    .sim-layout { grid-template-columns: 1fr; }
+    .sim-tools { position: static; }
+    .story-grid { grid-template-columns: 1fr; gap: 24px; }
+}
+</style>

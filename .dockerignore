@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/data.db
+**/data.db-*
+**/uploads
+**/logs
+**/.env
+**/.env.*
+.git
+.vscode
+.idea
+*.log
+data/
+backups/
